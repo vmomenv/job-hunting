@@ -1,0 +1,28 @@
+# Job Hunting Bot Configuration
+
+# Matching Thresholds
+min_salary: 15  # in k (e.g., 15k)
+min_score: 70   # minimum matching score from LLM/Keywords
+
+# Keywords for filtering
+keywords:
+  - "Python"
+  - "Developer"
+  - "Backend"
+  - "FastAPI"
+  - "Django"
+
+# Excluded Keywords (Negatives)
+exclude_keywords:
+  - "Intern"
+  - "Sales"
+  - "Manager"
+
+# Device Configuration
+device:
+  resolution: "720x1280"
+  adb_port: 5555
+
+# LLM Configuration
+llm_model: "gpt-4"
+prompt_template: "templates/matching_prompt.txt"
