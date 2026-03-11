@@ -68,6 +68,10 @@ class DeviceController:
         subprocess.run(["adb", "-s", self.serial, "pull", "/sdcard/screen.png", save_path])
         return save_path
 
+    def send_keyevent(self, keycode):
+        """Send a hardware key event (e.g., 4 for Back)."""
+        subprocess.run(["adb", "-s", self.serial, "shell", "input", "keyevent", str(keycode)])
+
 if __name__ == "__main__":
     # Self-test
     ctrl = DeviceController()

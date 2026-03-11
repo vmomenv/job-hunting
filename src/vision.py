@@ -1,86 +1,106 @@
 import os
+import base64
+import requests
+import json
+
 try:
     from paddleocr import PaddleOCR
 except ImportError:
     PaddleOCR = None
 
+class VLMClient:
+    def __init__(self, model="llama3-vision", api_url="http://localhost:11434/api/generate"):
+        self.model = model
+        self.api_url = api_url
+
+    def query(self, image_path, prompt):
+        """Send a query to the VLM with an image."""
+        if not os.path.exists(image_path):
+            return "Error: Image not found."
+
+        with open(image_path, "rb") as image_file:
+            encoded_image = base64.b64encode(image_file.read()).decode("utf-8")
+
+        payload = {
+            "model": self.model,
+            "prompt": prompt,
+            "images": [encoded_image],
+            "stream": False,
+            "format": "json"
+        }
+
+        try:
+            response = requests.post(self.api_url, json=payload, timeout=30)
+            response.raise_for_status()
+            data = response.json()
+            return data.get("response", "")
+        except Exception as e:
+            return f"Error: VLM request failed - {str(e)}"
+
 class VisionEngine:
-    def __init__(self, lang="ch"):
-        self.lang = lang
+    def __init__(self, use_vlm=True, vlm_model="llama3-vision"):
+        self.use_vlm = use_vlm
+        self.vlm = VLMClient(model=vlm_model) if use_vlm else None
         self.ocr = None
-        if PaddleOCR:
-            # We initialize OCR lazily to save resources if not needed
-            pass
 
     def _init_ocr(self):
         if not self.ocr and PaddleOCR:
-            self.ocr = PaddleOCR(use_angle_cls=True, lang=self.lang, show_log=False)
+            self.ocr = PaddleOCR(use_angle_cls=True, lang="ch", show_log=False)
         return self.ocr
 
-    def parse_screen(self, image_path):
-        """Run OCR on the entire screenshot and return structured data."""
-        if not os.path.exists(image_path):
-            print(f"Error: Screenshot not found at {image_path}")
-            return []
+    def analyze_search_results(self, image_path, query_keyword="Python"):
+        """Use VLM to find relevant jobs on the search results page."""
+        prompt = f"""
+        Identify job listings on this screen related to '{query_keyword}'.
+        For each job card, provide:
+        - Job Title
+        - Company Name
+        - Salary (e.g., 20k-30k)
+        - Center Coordinates [x, y] for clicking the card.
+        Return the result as a JSON array of objects.
+        """
+        if self.use_vlm:
+            response_text = self.vlm.query(image_path, prompt)
+            try:
+                # Attempt to extract JSON from response
+                start = response_text.find("[")
+                end = response_text.rfind("]") + 1
+                if start != -1 and end != -1:
+                    return json.loads(response_text[start:end])
+            except:
+                print("Warning: Failed to parse VLM JSON response.")
+        
+        return []
 
+    def get_job_detail_text(self, image_path):
+        """Extract all job description text from a detail page."""
+        if self.use_vlm:
+            prompt = "Extract the complete job description (JD) and requirements from this screen."
+            return self.vlm.query(image_path, prompt)
+        
+        # Fallback to OCR
+        elements = self.parse_screen_ocr(image_path)
+        return "\n".join([el["text"] for el in elements])
+
+    def parse_screen_ocr(self, image_path):
+        """Fallback OCR-based parsing."""
         ocr = self._init_ocr()
         if not ocr:
-            print("Warning: PaddleOCR not installed. Returning mock data.")
-            return self._get_mock_data()
+            return []
 
         result = ocr.ocr(image_path, cls=True)
-        
         parsed_elements = []
         if result and result[0]:
             for line in result[0]:
-                coords = line[0]  # [[x1,y1], [x2,y1], [x2,y2], [x1,y2]]
+                coords = line[0]
                 text = line[1][0]
-                confidence = line[1][1]
-                
-                # Calculate center
                 cx = sum(p[0] for p in coords) / 4
                 cy = sum(p[1] for p in coords) / 4
-                
-                parsed_elements.append({
-                    "text": text,
-                    "center": (int(cx), int(cy)),
-                    "box": coords,
-                    "confidence": confidence
-                })
-        
+                parsed_elements.append({"text": text, "center": (int(cx), int(cy))})
         return parsed_elements
 
-    def find_button_by_text(self, elements, target_text):
-        """Look for a specific text in parsed elements and return its center."""
-        for el in elements:
-            if target_text in el["text"]:
-                return el["center"]
-        return None
-
-    def find_job_cards(self, elements):
-        """
-        Heuristic: Job cards usually contain salary info (e.g., '15-25k').
-        In a real app, we might look for specific UI patterns.
-        """
-        job_cards = []
-        for el in elements:
-            # Simple regex search for salary patterns could be added here
-            if "K" in el["text"].upper() or "薪" in el["text"]:
-                job_cards.append(el)
-        return job_cards
-
-    def _get_mock_data(self):
-        """Mock data for testing when OCR is unavailable."""
-        return [
-            {"text": "Python开发", "center": (360, 400), "confidence": 0.99},
-            {"text": "20K-40K", "center": (600, 400), "confidence": 0.99},
-            {"text": "立即沟通", "center": (600, 1100), "confidence": 0.99}
-        ]
-
 if __name__ == "__main__":
-    # Test
+    # Test VLM capability if Ollama is running
     eng = VisionEngine()
-    # Assuming a sample image exists or using mock
-    elements = eng.parse_screen("tmp/screen.png")
-    for el in elements:
-        print(f"Found: {el['text']} at {el['center']}")
+    # Mock call
+    print("VLM analysis (mock/requires local ollama):", eng.analyze_search_results("tmp/screen.png"))
