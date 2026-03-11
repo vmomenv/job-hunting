@@ -22,6 +22,12 @@ exclude_keywords:
 device:
   resolution: "720x1280"
   adb_port: 5555
+  # Optional: Automatically find adb or set custom path
+  # adb_path: "C:\\platform-tools\\adb.exe"
+  # Optional: Connect to a specific device via serial or IP for USB/Emulator
+  # device_serial: "emulator-5554"
+  # Optional: Connect to device via Wi-Fi (adb connect <IP>)
+  # wifi_device_ip: "192.168.1.100:5555"
 
 # LLM Configuration
 llm_model: "gpt-4"
