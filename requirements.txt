@@ -1,0 +1,7 @@
+gradio
+requests
+Pillow
+opencv-python
+pandas
+openpyxl
+pyyaml
