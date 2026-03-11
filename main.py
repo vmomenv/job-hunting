@@ -13,10 +13,12 @@ def main():
     # 1. Initialize Modules
     ctrl = DeviceController()
     vision = VisionEngine(use_vlm=True) # Ensure VLM is enabled
+    matcher = ResumeMatcher()
     data_mgr = DataManager()
     
     # Matching thresholds from config
     min_salary_threshold = data_mgr.config.get("min_salary", 15)
+    min_score_threshold = data_mgr.config.get("min_score", 70)
     target_keyword = data_mgr.config.get("keywords", ["Python"])[0]
 
     # 2. Connect to Device
@@ -72,18 +74,28 @@ def main():
                     detail_screen = ctrl.take_screenshot("tmp/detail.png")
                     jd_text = vision.get_job_detail_text(detail_screen)
                     
+                    print(f"🧠 Analyzing match for {title}...")
+                    match_result = matcher.analyze_job(jd_text)
+                    score = match_result.get("score", 0)
+                    decision = match_result.get("decision", "save")
+                    reasons = ", ".join(match_result.get("pros", []))
+
+                    if score < min_score_threshold:
+                        print(f"📉 Score {score} below threshold {min_score_threshold}. Setting to 'save'.")
+                        decision = "save"
+
                     # 5. Save to Excel
                     data_mgr.save_job(
                         platform="Auto", 
                         company=company,
                         title=title,
                         salary=salary_str,
-                        score=0, # Placeholder for further analysis
-                        decision="potential",
-                        reasons="Vision matched salary requirements"
+                        score=score,
+                        decision=decision,
+                        reasons=reasons
                     )
                     
-                    print(f"💾 Job saved to Excel for reference.")
+                    print(f"💾 Job saved with score {score} and decision: {decision}")
 
                     # Go back to list
                     print("🔙 Returning to search results (Back key)...")

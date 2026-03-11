@@ -2,6 +2,9 @@ import os
 import base64
 import requests
 import json
+import xml.etree.ElementTree as ET
+import re
+from PIL import Image, ImageDraw, ImageFont
 
 try:
     from paddleocr import PaddleOCR
@@ -88,7 +91,7 @@ class VisionEngine:
         if not ocr:
             return []
 
-        result = ocr.ocr(image_path, cls=True)
+        result = ocr.ocr(str(image_path), cls=True)
         parsed_elements = []
         if result and result[0]:
             for line in result[0]:
@@ -96,8 +99,118 @@ class VisionEngine:
                 text = line[1][0]
                 cx = sum(p[0] for p in coords) / 4
                 cy = sum(p[1] for p in coords) / 4
-                parsed_elements.append({"text": text, "center": (int(cx), int(cy))})
+                parsed_elements.append({
+                    "text": text,
+                    "center": (int(cx), int(cy)),
+                    "bbox": [int(coords[0][0]), int(coords[0][1]), int(coords[2][0]), int(coords[2][1])]
+                })
         return parsed_elements
+
+    def parse_screen_uiautomator(self, xml_path):
+        """Parse UI Automator XML to find clickable and interactive elements."""
+        if not os.path.exists(xml_path):
+            return []
+
+        try:
+            tree = ET.parse(xml_path)
+            root = tree.getroot()
+        except Exception as e:
+            print(f"Error parsing UI XML: {e}")
+            return []
+
+        elements = []
+        # Find all nodes with bounds
+        for node in root.iter():
+            bounds = node.get("bounds")
+            if not bounds:
+                continue
+
+            # Check if interactive
+            is_clickable = node.get("clickable") == "true"
+            is_enabled = node.get("enabled") == "true"
+            text = node.get("text")
+            content_desc = node.get("content-desc")
+            
+            # We want elements that are clickable OR have meaningful text
+            if (is_clickable and is_enabled) or (text and len(text) > 0) or (content_desc and len(content_desc) > 0):
+                # Parse bounds [x1,y1][x2,y2]
+                match = re.match(r'\[(\d+),(\d+)\]\[(\d+),(\d+)\]', bounds)
+                if match:
+                    x1, y1, x2, y2 = map(int, match.groups())
+                    # Skip very small elements or full screen elements
+                    if (x2 - x1) < 10 or (y2 - y1) < 10:
+                        continue
+                    
+                    elements.append({
+                        "text": text or content_desc or "",
+                        "center": ((x1 + x2) // 2, (y1 + y2) // 2),
+                        "bbox": [x1, y1, x2, y2]
+                    })
+        
+        # Deduplicate overlapping elements
+        unique_elements = []
+        for el in elements:
+            is_dup = False
+            for uel in unique_elements:
+                if abs(el["center"][0] - uel["center"][0]) < 20 and abs(el["center"][1] - uel["center"][1]) < 20:
+                    is_dup = True
+                    break
+            if not is_dup:
+                unique_elements.append(el)
+
+        return unique_elements
+
+    def get_annotated_screen(self, image_path, xml_path=None):
+        """
+        Produce an annotated version of the screenshot with numeric labels.
+        Returns (annotated_pil_image, label_map)
+        """
+        if not os.path.exists(image_path):
+            return None, {}
+
+        # 1. Parse elements: prefer XML, fallback to OCR
+        elements = []
+        if xml_path and os.path.exists(xml_path):
+            elements = self.parse_screen_uiautomator(xml_path)
+        
+        if not elements:
+            elements = self.parse_screen_ocr(image_path)
+        
+        # 2. Draw annotations
+        image = Image.open(image_path).convert("RGB")
+        draw = ImageDraw.Draw(image)
+        
+        label_map = {}
+        for i, el in enumerate(elements):
+            label_id = str(i + 1)
+            bbox = el["bbox"]
+            center = el["center"]
+            
+            # Draw bbox
+            draw.rectangle(bbox, outline="red", width=2)
+            
+            # Draw label background
+            label_text = f" {label_id} "
+            try:
+                # Try to load a font, fallback to default
+                font = ImageFont.truetype("arial.ttf", 18)
+            except:
+                font = ImageFont.load_default()
+            
+            # Use textbbox if available (Pillow 10.0+) or fallback
+            if hasattr(draw, "textbbox"):
+                t_bbox = draw.textbbox((bbox[0], bbox[1]), label_text, font=font)
+            else:
+                # Older Pillow versions
+                tw, th = draw.textsize(label_text, font=font)
+                t_bbox = (bbox[0], bbox[1], bbox[0] + tw, bbox[1] + th)
+            
+            draw.rectangle(t_bbox, fill="red")
+            draw.text((bbox[0], bbox[1]), label_text, fill="white", font=font)
+            
+            label_map[label_id] = center
+
+        return image, label_map
 
 if __name__ == "__main__":
     # Test VLM capability if Ollama is running

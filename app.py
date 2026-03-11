@@ -2,6 +2,7 @@ import gradio as gr
 import time
 from src.adb_utils import AdbController
 from src.agent import VisualAgent, execute_action_on_device
+from src.vision import VisionEngine
 import cv2
 import numpy as np
 from PIL import Image
@@ -11,12 +12,14 @@ class AppState:
     def __init__(self):
         self.adb = AdbController()
         self.agent = VisualAgent(model="minicpm-v")  # Set to minicpm-v as requested
+        self.vision = VisionEngine()
         self.running = False
         self.auto_mode = False
         self.pending_action = None
         self.current_task = ""
         self.chat_history = []
         self.latest_screenshot = None
+        self.label_map = {}
         self.device_connected = False
 
 app_state = AppState()
@@ -56,11 +59,34 @@ def draw_action_on_image(image, action_dict):
 
     return Image.fromarray(cv2.cvtColor(img_cv, cv2.COLOR_BGR2RGB))
 
-def refresh_screen():
+def refresh_screen(annotate=False):
     if not app_state.device_connected:
         return None
+    
+    # Save a temporary screenshot for vision processing
+    temp_path = "tmp/current_screen.png"
+    if not os.path.exists("tmp"):
+        os.makedirs("tmp")
+        
     screenshot = app_state.adb.get_screenshot()
+    screenshot.save(temp_path)
+    
+    if annotate:
+        # Dump UI XML for better element detection
+        xml_path = "tmp/view.xml"
+        app_state.adb.keyevent("shell uiautomator dump /sdcard/view.xml") # This is a bit hacky via keyevent but let's see
+        # Better: use a proper method in adb_utils if it exists, or subprocess
+        import subprocess
+        subprocess.run([app_state.adb.adb_path, "-s", app_state.adb.device_serial, "shell", "uiautomator", "dump", "/sdcard/view.xml"], capture_output=True)
+        subprocess.run([app_state.adb.adb_path, "-s", app_state.adb.device_serial, "pull", "/sdcard/view.xml", xml_path], capture_output=True)
+        
+        annotated_img, label_map = app_state.vision.get_annotated_screen(temp_path, xml_path=xml_path)
+        app_state.label_map = label_map
+        app_state.latest_screenshot = annotated_img
+        return annotated_img
+    
     app_state.latest_screenshot = screenshot
+    app_state.label_map = {}
     return screenshot
 
 def step_agent(task, screenshot):
@@ -68,7 +94,7 @@ def step_agent(task, screenshot):
     if not screenshot:
         return {"type": "ERROR", "raw": "No screenshot available."}
 
-    action = app_state.agent.get_next_action(task, screenshot)
+    action = app_state.agent.get_next_action(task, screenshot, label_map=app_state.label_map)
     return action
 
 def process_loop(task, is_auto, chat_history):
@@ -93,8 +119,8 @@ def process_loop(task, is_auto, chat_history):
             break # Exit the generator, wait for user to click confirm or step
 
         # 1. Get screenshot
-        yield "获取截图中...", chat_history, app_state.latest_screenshot, gr.update(interactive=False), gr.update(interactive=False)
-        screenshot = refresh_screen()
+        yield "获取并标注截图中...", chat_history, app_state.latest_screenshot, gr.update(interactive=False), gr.update(interactive=False)
+        screenshot = refresh_screen(annotate=True)
         if not screenshot:
             app_state.running = False
             chat_history.append((None, "❌ 获取屏幕截图失败，任务停止。"))
@@ -231,7 +257,7 @@ with gr.Blocks(title="Android Vision Agent") as demo:
     conn_btn.click(fn=check_connection, outputs=[conn_status])
     demo.load(fn=check_connection, outputs=[conn_status])
 
-    refresh_screen_btn.click(fn=refresh_screen, outputs=[screen_display])
+    refresh_screen_btn.click(fn=lambda: refresh_screen(annotate=True), outputs=[screen_display])
     clear_btn.click(fn=clear_chat, outputs=[chatbot])
 
     start_btn.click(

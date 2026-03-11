@@ -40,36 +40,37 @@ class VisualAgent:
 You are a helpful AI assistant controlling an Android smartphone to complete a specific task for the user.
 The task is: "{task_description}"
 
-You are given a screenshot of the current Android device screen.
-Analyze the screen and decide the next single action to take.
+You are given a screenshot of the current Android device screen. Some elements on the screen may have numeric labels (e.g., a "1" in a red box next to an icon). 
+Analyze the screen and decide the next single action to take. 
 You must output ONLY ONE action from the list below. Do not provide any explanation, just the action command.
 
 Valid Actions:
-1. CLICK [x, y]
-   - Use this to tap on an element on the screen. x and y are the coordinates as a percentage of the screen width and height (from 0 to 100).
-   - Example: CLICK [50, 75] (clicks the middle-bottom part of the screen)
-2. SWIPE [start_x, start_y] TO [end_x, end_y]
-   - Use this to scroll or swipe. x and y are percentages (0-100).
-   - Example: SWIPE [50, 80] TO [50, 20] (scrolls down the page by swiping up)
-3. TYPE "text"
+1. CLICK [label]
+   - Use this to tap on an element that has a numeric label. 
+   - Example: CLICK [5] (taps on the element marked with label 5)
+2. CLICK [x, y]
+   - Use this to tap on a specific location if no label is available. x and y are the coordinates as a percentage of the screen width and height (0-100).
+   - Example: CLICK [50, 75] 
+3. SWIPE [start_label] TO [end_label] or SWIPE [start_x, start_y] TO [end_x, end_y]
+   - Use this to scroll or swipe. 
+   - Example: SWIPE [50, 80] TO [50, 20] 
+4. TYPE "text"
    - Use this to input text. Ensure you have clicked a text box before typing.
    - Example: TYPE "Hello world"
-4. BACK
+5. BACK
    - Use this to press the physical back button on Android.
-   - Example: BACK
-5. HOME
+6. HOME
    - Use this to press the physical home button.
-   - Example: HOME
-6. DONE
+7. DONE
    - Use this when the task is fully completed.
-   - Example: DONE
 
 Your response must be exactly one of these commands. Do not write anything else.
 Action: """
         return prompt
 
-    def get_next_action(self, task_description, current_screenshot):
+    def get_next_action(self, task_description, current_screenshot, label_map=None):
         """Send the current state to Ollama and get the next action."""
+        self.label_map = label_map or {}
 
         # Prepare image
         encoded_image, scale = self._resize_and_encode_image(current_screenshot)
@@ -120,7 +121,14 @@ Action: """
             py = max(0, min(py, height - 1))
             return px, py
 
-        # 1. CLICK [x, y]
+        # 1. CLICK [label] or CLICK [x, y]
+        label_click = re.match(r'^CLICK\s*\[\s*(\d+)\s*\]', raw_action, re.IGNORECASE)
+        if label_click:
+            label_id = label_click.group(1)
+            if label_id in self.label_map:
+                px, py = self.label_map[label_id]
+                return {"type": "CLICK", "x": px, "y": py, "raw": raw_action, "label": label_id}
+
         click_match = re.match(r'^CLICK\s*\[\s*([\d.]+)\s*,\s*([\d.]+)\s*\]', raw_action, re.IGNORECASE)
         if click_match:
             pct_x, pct_y = click_match.groups()
